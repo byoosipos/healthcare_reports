@@ -37,7 +37,11 @@ def get_data(filters):
 			gle.posting_date,
 			gle.voucher_type,
 			gle.voucher_no,
-			gle.account as income_account,
+			(SELECT account FROM `tabGL Entry` 
+			 WHERE voucher_no = gle.voucher_no 
+			 AND docstatus = 1 
+			 AND is_cancelled = 0
+			 AND account LIKE '%%Income%%' LIMIT 1) as income_account,
 			IFNULL((
 				SELECT SUM(debit)
 				FROM `tabGL Entry` gle_debit
@@ -75,10 +79,9 @@ def get_data(filters):
 			gle.docstatus = 1
 			AND gle.is_cancelled = 0
 			AND gle.voucher_type = 'Sales Invoice'
-			AND gle.account LIKE '%%Income%%'
 			{conditions}
 		GROUP BY
-			gle.voucher_no, gle.account
+			gle.voucher_no
 		ORDER BY
 			gle.posting_date DESC, gle.voucher_no
 	""".format(conditions=conditions), filters, as_dict=1)
