@@ -76,9 +76,9 @@ def get_data(filters):
 			per.reference_name as reference,
 			'Payment' as item_name,
 			pe.paid_to as account,
-			1 as qty,
-			per.allocated_amount as rate,
-			per.allocated_amount as amount,
+			NULL as qty,
+			NULL as rate,
+			NULL as amount,
 			per.allocated_amount as amount_paid,
 			0 as outstanding_amount
 		FROM
