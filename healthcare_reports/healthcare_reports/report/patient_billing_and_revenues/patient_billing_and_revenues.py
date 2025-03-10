@@ -75,7 +75,7 @@ def get_data(filters):
 			gle.docstatus = 1
 			AND gle.is_cancelled = 0
 			AND gle.voucher_type = 'Sales Invoice'
-			AND gle.account LIKE '%Income%'
+			AND gle.account LIKE '%%Income%%'
 			{conditions}
 		GROUP BY
 			gle.voucher_no, gle.account
