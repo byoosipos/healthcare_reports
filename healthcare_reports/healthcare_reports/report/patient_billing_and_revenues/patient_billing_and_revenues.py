@@ -18,19 +18,21 @@ def get_columns():
 		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 100},
 		{"label": _("Voucher Type"), "fieldname": "voucher_type", "fieldtype": "Data", "width": 120},
 		{"label": _("Voucher No"), "fieldname": "voucher_no", "fieldtype": "Dynamic Link", "options": "voucher_type", "width": 130},
-		{"label": _("Reference"), "fieldname": "reference", "fieldtype": "Data", "width": 150},
+		{"label": _("Reference"), "fieldname": "reference", "fieldtype": "Dynamic Link", "options": "reference_type", "width": 130},
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
 		{"label": _("Account"), "fieldname": "account", "fieldtype": "Link", "options": "Account", "width": 180},
 		{"label": _("Qty"), "fieldname": "qty", "fieldtype": "Float", "width": 80},
 		{"label": _("Rate"), "fieldname": "rate", "fieldtype": "Currency", "width": 100},
-		{"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "width": 120}
+		{"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "width": 120},
+		{"label": _("Amount Paid"), "fieldname": "amount_paid", "fieldtype": "Currency", "width": 120},
+		{"label": _("Outstanding Amount"), "fieldname": "outstanding_amount", "fieldtype": "Currency", "width": 120}
 	]
 
 def get_data(filters):
-	data = []
+	conditions = get_conditions(filters)
+	invoice_conditions = get_invoice_conditions(filters)
 	
 	# Get Sales Invoice data (items and income accounts)
-	invoice_conditions = get_invoice_conditions(filters)
 	sales_invoice_data = frappe.db.sql("""
 		SELECT 
 			p.name as patient,
@@ -39,12 +41,15 @@ def get_data(filters):
 			si.posting_date,
 			'Sales Invoice' as voucher_type,
 			si.name as voucher_no,
-			'' as reference,
+			NULL as reference_type,
+			NULL as reference,
 			sii.item_name,
 			sii.income_account as account,
 			sii.qty,
 			sii.rate,
-			sii.amount
+			sii.amount,
+			0 as amount_paid,
+			sii.amount as outstanding_amount
 		FROM
 			`tabSales Invoice` si
 		INNER JOIN
@@ -56,12 +61,9 @@ def get_data(filters):
 			{conditions}
 		ORDER BY
 			si.posting_date DESC, si.name, sii.idx
-	""".format(conditions=invoice_conditions), filters, as_dict=1)
-	
-	data.extend(sales_invoice_data)
+	""".format(conditions=conditions), filters, as_dict=1)
 	
 	# Get Payment Entry data
-	payment_conditions = get_payment_conditions(filters)
 	payment_data = frappe.db.sql("""
 		SELECT 
 			p.name as patient,
@@ -70,12 +72,15 @@ def get_data(filters):
 			pe.posting_date,
 			'Payment Entry' as voucher_type,
 			pe.name as voucher_no,
+			'Sales Invoice' as reference_type,
 			per.reference_name as reference,
 			'Payment' as item_name,
 			pe.paid_to as account,
 			1 as qty,
 			per.allocated_amount as rate,
-			per.allocated_amount as amount
+			per.allocated_amount as amount,
+			per.allocated_amount as amount_paid,
+			0 as outstanding_amount
 		FROM
 			`tabPayment Entry` pe
 		INNER JOIN
@@ -92,94 +97,41 @@ def get_data(filters):
 			{conditions}
 		ORDER BY
 			pe.posting_date DESC, pe.name
-	""".format(conditions=payment_conditions), filters, as_dict=1)
+	""".format(conditions=get_payment_conditions(filters)), filters, as_dict=1)
 	
-	data.extend(payment_data)
-	
-	# Get Journal Entry data affecting patient invoices
-	journal_conditions = get_journal_conditions(filters)
-	journal_data = frappe.db.sql("""
-		SELECT 
-			p.name as patient,
-			p.patient_name,
-			c.customer_name,
-			je.posting_date,
-			'Journal Entry' as voucher_type,
-			je.name as voucher_no,
-			jea.reference_name as reference,
-			CONCAT(je.title, ' - ', jea.account) as item_name,
-			jea.account as account,
-			1 as qty,
-			jea.credit as rate,
-			jea.credit as amount
-		FROM
-			`tabJournal Entry` je
-		INNER JOIN
-			`tabJournal Entry Account` jea ON je.name = jea.parent
-		INNER JOIN
-			`tabSales Invoice` si ON jea.reference_name = si.name
-		INNER JOIN
-			`tabPatient` p ON si.patient = p.name
-		INNER JOIN
-			`tabCustomer` c ON si.customer = c.name
-		WHERE
-			je.docstatus = 1
-			AND jea.reference_type = 'Sales Invoice'
-			AND jea.credit > 0
-			{conditions}
-		
-		UNION ALL
-		
-		SELECT 
-			p.name as patient,
-			p.patient_name,
-			c.customer_name,
-			je.posting_date,
-			'Journal Entry' as voucher_type,
-			je.name as voucher_no,
-			jea.reference_name as reference,
-			CONCAT(je.title, ' - ', jea.account) as item_name,
-			jea.account as account,
-			1 as qty,
-			jea.debit * -1 as rate,
-			jea.debit * -1 as amount
-		FROM
-			`tabJournal Entry` je
-		INNER JOIN
-			`tabJournal Entry Account` jea ON je.name = jea.parent
-		INNER JOIN
-			`tabSales Invoice` si ON jea.reference_name = si.name
-		INNER JOIN
-			`tabPatient` p ON si.patient = p.name
-		INNER JOIN
-			`tabCustomer` c ON si.customer = c.name
-		WHERE
-			je.docstatus = 1
-			AND jea.reference_type = 'Sales Invoice'
-			AND jea.debit > 0
-			{conditions}
-	""".format(conditions=journal_conditions), filters, as_dict=1)
-	
-	data.extend(journal_data)
+	# Combine data
+	combined_data = sales_invoice_data + payment_data
 	
 	# Sort the combined data by posting_date
-	data.sort(key=lambda x: (x.posting_date, x.voucher_type, x.voucher_no), reverse=True)
+	combined_data.sort(key=lambda x: x.posting_date, reverse=True)
 	
-	return data
-
-def get_journal_conditions(filters):
-	conditions = []
+	# Update the outstanding amounts on Sales Invoice rows based on related payments
+	invoice_payments = {}
+	invoice_total_amounts = {}
 	
-	if filters.get("from_date"):
-		conditions.append("je.posting_date >= %(from_date)s")
-	if filters.get("to_date"):
-		conditions.append("je.posting_date <= %(to_date)s")
-	if filters.get("patient"):
-		conditions.append("p.name = %(patient)s")
-	if filters.get("account"):
-		conditions.append("jea.account = %(account)s")
+	# Collect all payments by invoice reference
+	for row in payment_data:
+		if row.reference not in invoice_payments:
+			invoice_payments[row.reference] = 0
+		invoice_payments[row.reference] += row.amount_paid
 	
-	return " AND " + " AND ".join(conditions) if conditions else ""
+	# Get the total amount of each invoice first
+	for row in sales_invoice_data:
+		if row.voucher_no not in invoice_total_amounts:
+			invoice_total_amounts[row.voucher_no] = 0
+		invoice_total_amounts[row.voucher_no] += row.amount
+	
+	# Now update the outstanding amounts based on proportional payments
+	for row in combined_data:
+		if row.voucher_type == 'Sales Invoice':
+			if row.voucher_no in invoice_payments and invoice_total_amounts[row.voucher_no] > 0:
+				# Calculate what portion of the total invoice this line represents
+				line_proportion = row.amount / invoice_total_amounts[row.voucher_no]
+				# Apply that proportion of the total payment to this line's outstanding amount
+				proportional_payment = invoice_payments.get(row.voucher_no, 0) * line_proportion
+				row.outstanding_amount = max(0, row.amount - proportional_payment)
+	
+	return combined_data
 
 def get_payment_conditions(filters):
 	conditions = []
