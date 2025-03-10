@@ -19,6 +19,7 @@ def get_columns():
 		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 100},
 		{"label": _("Voucher Type"), "fieldname": "voucher_type", "fieldtype": "Data", "width": 120},
 		{"label": _("Voucher No"), "fieldname": "voucher_no", "fieldtype": "Dynamic Link", "options": "voucher_type", "width": 130},
+		{"label": _("Income Account"), "fieldname": "income_account", "fieldtype": "Link", "options": "Account", "width": 150},
 		{"label": _("Invoiced Amount"), "fieldname": "invoiced_amount", "fieldtype": "Currency", "width": 120},
 		{"label": _("Amount Paid"), "fieldname": "amount_paid", "fieldtype": "Currency", "width": 120},
 		{"label": _("Outstanding Amount"), "fieldname": "outstanding_amount", "fieldtype": "Currency", "width": 120}
@@ -36,6 +37,7 @@ def get_data(filters):
 			gle.posting_date,
 			gle.voucher_type,
 			gle.voucher_no,
+			gle.account as income_account,
 			IFNULL((
 				SELECT SUM(debit)
 				FROM `tabGL Entry` gle_debit
@@ -73,11 +75,12 @@ def get_data(filters):
 			gle.docstatus = 1
 			AND gle.is_cancelled = 0
 			AND gle.voucher_type = 'Sales Invoice'
+			AND gle.account LIKE '%Income%'
 			{conditions}
 		GROUP BY
-			gle.voucher_no
+			gle.voucher_no, gle.account
 		ORDER BY
-			gle.posting_date DESC
+			gle.posting_date DESC, gle.voucher_no
 	""".format(conditions=conditions), filters, as_dict=1)
 	
 	return data
